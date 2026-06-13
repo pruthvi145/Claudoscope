@@ -44,8 +44,14 @@ struct ProjectScanner {
                 if name.hasSuffix(".jsonl") {
                     let sid = String(name.dropLast(6))
                     allEntries.append((dirName, dirURL.appendingPathComponent(name), sid))
+                    // A session file is never a directory, so it can't hold a
+                    // subagents/ subdir. Skipping the probe below removes one
+                    // failed `contentsOfDirectory` syscall per session file —
+                    // i.e. ~half of all scan syscalls for projects dominated by
+                    // top-level transcripts.
+                    continue
                 }
-                // Check for subagent files inside session subdirectories
+                // Only session-id *directories* can hold a subagents/ subdir.
                 let subagentsDir = dirURL.appendingPathComponent(name).appendingPathComponent("subagents")
                 if let subFiles = try? fm.contentsOfDirectory(atPath: subagentsDir.path) {
                     for subFile in subFiles where subFile.hasSuffix(".jsonl") {

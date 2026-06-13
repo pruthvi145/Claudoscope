@@ -37,6 +37,19 @@ actor SessionParser {
         return d
     }()
 
+    /// Shared LOCAL-day formatter (yyyy-MM-dd, POSIX). Previously `parseMetadata`
+    /// allocated a fresh DateFormatter (plus two ISO8601DateFormatters) on every
+    /// call — i.e. once per session file on the startup scan, which dominated
+    /// parse setup cost for users with thousands of sessions. DateFormatter is
+    /// safe to share for read-only `string(from:)` use; the ISO parsing now goes
+    /// through the already-cached `ISO8601` helper.
+    private static let localDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
     /// Cache of a parent transcript's billable assistant `message.id`s, keyed by
     /// the parent file path and validated by mtime. Used to strip parent-replayed
     /// records out of context-forking subagent files (auto-compact / aside) so
@@ -460,20 +473,13 @@ actor SessionParser {
         var hasWorktreeTool = false
         var recordTimestamps: [String] = []
 
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoFormatterNoFrac = ISO8601DateFormatter()
-        isoFormatterNoFrac.formatOptions = [.withInternetDateTime]
-
         // LOCAL calendar day (YYYY-MM-DD) for per-day cost attribution. Local (not
         // UTC) so it matches Calendar.current.startOfDay used by the "today" filter
-        // in SessionStore and AnalyticsTimeRange.
-        let localDayFormatter = DateFormatter()
-        localDayFormatter.dateFormat = "yyyy-MM-dd"
-        localDayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        // in SessionStore and AnalyticsTimeRange. Uses the shared static formatter
+        // (see `localDayFormatter`) rather than allocating one per parse.
         func localDayKey(_ ts: String) -> String? {
             guard let date = ISO8601.parse(ts) else { return nil }
-            return localDayFormatter.string(from: date)
+            return Self.localDayFormatter.string(from: date)
         }
 
         // Phase 3: replay the buffered records using the original accumulation
@@ -633,8 +639,8 @@ actor SessionParser {
                     // Observability: compute turn duration
                     var durationMs: Double = 0
                     if let userTs = lastUserTimestamp, let assistantTs = raw.timestamp {
-                        let userDate = isoFormatter.date(from: userTs) ?? isoFormatterNoFrac.date(from: userTs)
-                        let assistantDate = isoFormatter.date(from: assistantTs) ?? isoFormatterNoFrac.date(from: assistantTs)
+                        let userDate = ISO8601.parse(userTs)
+                        let assistantDate = ISO8601.parse(assistantTs)
                         if let ud = userDate, let ad = assistantDate {
                             durationMs = max(0, ad.timeIntervalSince(ud) * 1000)
                         }

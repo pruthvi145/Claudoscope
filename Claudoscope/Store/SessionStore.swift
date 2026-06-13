@@ -519,51 +519,76 @@ final class SessionStore {
         )
     }
 
-    func recomputeAnalytics() {
-        let sessions: [(session: SessionSummary, project: Project)]
-        if let projectId = selectedAnalyticsProjectId {
-            sessions = allSessionsWithProjects.filter { $0.project.id == projectId }
-        } else {
-            sessions = allSessionsWithProjects
-        }
+    /// Monotonic token guarding against out-of-order analytics results. Each
+    /// recompute captures the current value; a background result is applied only
+    /// if it is still the latest, so a slow compute that finishes after a newer
+    /// one can't clobber fresher data.
+    private var analyticsGeneration: Int = 0
 
+    func recomputeAnalytics() {
+        // Snapshot every input on the MainActor (all value-type, Sendable). The
+        // heavy O(sessions × days) aggregation then runs OFF the main thread, so
+        // a large dataset no longer freezes the Analytics UI on each file change /
+        // time-range switch. Results are published back on the MainActor.
+        let allPairs = allSessionsWithProjects
+        let selectedId = selectedAnalyticsProjectId
+        let table = pricingTable
         let (from, to) = analyticsTimeRange.dateRange(
             customFrom: analyticsCustomFrom,
             customTo: analyticsCustomTo
         )
+        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())
+        let coworkSessionsSnapshot = coworkSessions
+        let coworkParsedSnapshot = coworkParsedSessionsByID
 
-        let baseData = AnalyticsEngine.compute(
-            sessions: sessions,
-            pricingTable: pricingTable,
-            from: from,
-            to: to
-        )
+        analyticsGeneration &+= 1
+        let generation = analyticsGeneration
 
-        // Cowork cost is only attached when no project filter is active —
-        // Cowork's project namespace doesn't overlap with CLI projects, so
-        // mixing them under a filtered view would imply a relationship that
-        // doesn't exist.
-        if selectedAnalyticsProjectId == nil {
-            let (coworkCost, hasUnknown) = AnalyticsEngine.computeCoworkCost(
-                sessions: coworkSessions,
-                parsedByID: coworkParsedSessionsByID,
-                pricingTable: pricingTable,
+        Task.detached(priority: .userInitiated) {
+            let sessions = selectedId == nil
+                ? allPairs
+                : allPairs.filter { $0.project.id == selectedId }
+
+            let baseData = AnalyticsEngine.compute(
+                sessions: sessions,
+                pricingTable: table,
                 from: from,
                 to: to
             )
-            analyticsData = baseData.merging(coworkCost: coworkCost, hasUnknownModel: hasUnknown)
-        } else {
-            analyticsData = baseData
-        }
 
-        // Also recompute sidebar analytics (all projects, 30d)
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())
-        sidebarAnalyticsData = AnalyticsEngine.compute(
-            sessions: allSessionsWithProjects,
-            pricingTable: pricingTable,
-            from: thirtyDaysAgo,
-            to: nil
-        )
+            // Cowork cost is only attached when no project filter is active —
+            // Cowork's project namespace doesn't overlap with CLI projects, so
+            // mixing them under a filtered view would imply a relationship that
+            // doesn't exist.
+            let mainData: AnalyticsData
+            if selectedId == nil {
+                let (coworkCost, hasUnknown) = AnalyticsEngine.computeCoworkCost(
+                    sessions: coworkSessionsSnapshot,
+                    parsedByID: coworkParsedSnapshot,
+                    pricingTable: table,
+                    from: from,
+                    to: to
+                )
+                mainData = baseData.merging(coworkCost: coworkCost, hasUnknownModel: hasUnknown)
+            } else {
+                mainData = baseData
+            }
+
+            // Sidebar analytics (always all projects, 30d, for cost ranking).
+            let sidebar = AnalyticsEngine.compute(
+                sessions: allPairs,
+                pricingTable: table,
+                from: thirtyDaysAgo,
+                to: nil
+            )
+
+            await MainActor.run {
+                // Drop stale results: a newer recompute already superseded this one.
+                guard self.analyticsGeneration == generation else { return }
+                self.analyticsData = mainData
+                self.sidebarAnalyticsData = sidebar
+            }
+        }
     }
 
     /// Cached analytics for the sidebar (always all projects, 30d, for cost ranking).

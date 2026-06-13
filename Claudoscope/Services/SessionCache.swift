@@ -1,12 +1,16 @@
 import Foundation
 import OrderedCollections
 
-/// LRU cache for parsed sessions, capacity 20.
+/// LRU cache for parsed sessions, capacity 50.
 actor SessionCache {
     private var cache = OrderedDictionary<String, ParsedSession>()
     private let capacity: Int
 
-    init(capacity: Int = 20) {
+    // Bumped 20 -> 50: heavy users navigate far more than 20 sessions in a
+    // sitting, and the old cap forced a full re-parse every time a session
+    // scrolled out of the window. 50 keeps recently-viewed transcripts hot
+    // while staying well within memory (records are the only large field).
+    init(capacity: Int = 50) {
         self.capacity = capacity
     }
 
