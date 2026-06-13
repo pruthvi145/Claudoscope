@@ -168,98 +168,120 @@ private struct SessionsSidebarContent: View {
     let filterText: String
     @Binding var selectedSessionId: String?
     @Binding var selectedProjectId: String?
+    // Collapse state lifted out of the per-project view so the whole list can be
+    // ONE flat LazyVStack. Empty = every project expanded (the prior default).
+    @State private var collapsedProjects: Set<String> = []
 
-    var filteredProjects: [Project] {
-        if filterText.isEmpty { return projects }
-        return projects.filter { project in
-            project.name.localizedCaseInsensitiveContains(filterText) ||
-            visibleSessions(for: project).contains { session in
-                session.title.localizedCaseInsensitiveContains(filterText)
+    // Flattened rows so the ENTIRE list is virtualized. Previously each project's
+    // sessions lived in a non-lazy ForEach inside its ProjectGroup, so a project
+    // with thousands of sessions built thousands of SessionRow views the moment it
+    // hit the viewport — freezing scroll, input, and filtering. A single
+    // LazyVStack over a flat [Row] builds only the ~30 rows actually on screen,
+    // regardless of total session count.
+    private enum Row: Identifiable {
+        case header(project: Project, count: Int)
+        case session(SessionSummary, projectId: String)
+        var id: String {
+            switch self {
+            case .header(let project, _): return "h-\(project.id)"
+            case .session(let session, _): return "s-\(session.id)"
             }
         }
+    }
+
+    private var rows: [Row] {
+        let filtering = !filterText.isEmpty
+        var result: [Row] = []
+        for project in projects {
+            // Subagents are hidden — their UUID titles add noise and are already
+            // represented by their parent row.
+            let visible = (sessionsByProject[project.id] ?? []).filter { !$0.isSubagent }
+            let matching: [SessionSummary]
+            if filtering {
+                let titleMatched = visible.filter { $0.title.localizedCaseInsensitiveContains(filterText) }
+                let nameMatches = project.name.localizedCaseInsensitiveContains(filterText)
+                if !nameMatches && titleMatched.isEmpty { continue }
+                matching = titleMatched
+            } else {
+                matching = visible
+            }
+            result.append(.header(project: project, count: matching.count))
+            if !collapsedProjects.contains(project.id) {
+                for session in matching {
+                    result.append(.session(session, projectId: project.id))
+                }
+            }
+        }
+        return result
     }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(filteredProjects) { project in
-                ProjectGroup(
-                    project: project,
-                    sessions: filteredSessions(for: project),
-                    selectedSessionId: $selectedSessionId,
-                    selectedProjectId: $selectedProjectId
-                )
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    // Subagents are hidden from the sidebar — their UUID titles add noise and
-    // they're already represented by their parent session row.
-    private func visibleSessions(for project: Project) -> [SessionSummary] {
-        (sessionsByProject[project.id] ?? []).filter { !$0.isSubagent }
-    }
-
-    private func filteredSessions(for project: Project) -> [SessionSummary] {
-        let sessions = visibleSessions(for: project)
-        if filterText.isEmpty { return sessions }
-        return sessions.filter { $0.title.localizedCaseInsensitiveContains(filterText) }
-    }
-}
-
-private struct ProjectGroup: View {
-    let project: Project
-    let sessions: [SessionSummary]
-    @Binding var selectedSessionId: String?
-    @Binding var selectedProjectId: String?
-    @State private var isExpanded = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Project header
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12)
-
-                    Text(project.name)
-                        .font(Typography.bodyMedium)
-                        .lineLimit(1)
-                        .help(project.name)
-
-                    Spacer()
-
-                    Text("\(sessions.count)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(Capsule())
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                ForEach(sessions) { session in
+            ForEach(rows) { row in
+                switch row {
+                case .header(let project, let count):
+                    ProjectHeaderRow(
+                        name: project.name,
+                        count: count,
+                        isExpanded: !collapsedProjects.contains(project.id)
+                    ) {
+                        if collapsedProjects.contains(project.id) {
+                            collapsedProjects.remove(project.id)
+                        } else {
+                            collapsedProjects.insert(project.id)
+                        }
+                    }
+                case .session(let session, let projectId):
                     SessionRow(
                         session: session,
                         isSelected: selectedSessionId == session.id
                     ) {
                         selectedSessionId = session.id
-                        selectedProjectId = project.id
+                        selectedProjectId = projectId
                     }
                 }
             }
         }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ProjectHeaderRow: View {
+    let name: String
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { onToggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12)
+
+                Text(name)
+                    .font(Typography.bodyMedium)
+                    .lineLimit(1)
+                    .help(name)
+
+                Spacer()
+
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
