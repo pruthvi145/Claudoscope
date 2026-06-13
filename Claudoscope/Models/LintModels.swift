@@ -98,7 +98,7 @@ enum LintCheckId: String, Sendable, CaseIterable {
     case SEC010  // critical platform token (account-level credentials)
 }
 
-struct LintResult: Identifiable, Sendable {
+struct LintResult: Identifiable, Sendable, Equatable {
     let id: String
     let severity: LintSeverity
     let checkId: LintCheckId

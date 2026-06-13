@@ -2,6 +2,12 @@ import SwiftUI
 
 // MARK: - Overview
 
+private struct SeverityDescriptors {
+    var error: String = ""
+    var warning: String = ""
+    var info: String = ""
+}
+
 struct HealthOverviewView: View {
     let lintResults: [LintResult]
     let lintSummary: LintSummary
@@ -12,6 +18,11 @@ struct HealthOverviewView: View {
     var onRescan: (() -> Void)?
     @State private var viewMode: ViewMode = .byCategory
     @State private var collapsedCategories: Set<String> = []
+
+    // Cached grouping state — populated by .task(id:) below
+    @State private var groupedByRule: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])] = []
+    @State private var groupedByCategory: [(category: CategoryDef, rules: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])])] = []
+    @State private var severityDescriptors = SeverityDescriptors()
 
     private var visibleResults: [LintResult] {
         var items = lintResults
@@ -24,33 +35,6 @@ struct HealthOverviewView: View {
         return items
     }
 
-    // Group by rule for "By Rule" view
-    private var groupedByRule: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])] {
-        let dict = Dictionary(grouping: visibleResults, by: \.checkId)
-        return dict.keys.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { key in
-            guard let items = dict[key], let first = items.first else { return nil }
-            return (checkId: key, severity: first.severity, results: items)
-        }
-    }
-
-    // Group by category for "By Category" view
-    private var groupedByCategory: [(category: CategoryDef, rules: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])])] {
-        let dict = Dictionary(grouping: visibleResults) { categoryFor($0.checkId).id }
-        var result: [(category: CategoryDef, rules: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])])] = []
-
-        let allCats = healthCategories + (dict.keys.contains("other") ? [otherCategory] : [])
-        for cat in allCats.sorted(by: { $0.sortOrder < $1.sortOrder }) {
-            guard let items = dict[cat.id], !items.isEmpty else { continue }
-            let byRule = Dictionary(grouping: items, by: \.checkId)
-            let rules = byRule.keys.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { key -> (checkId: LintCheckId, severity: LintSeverity, results: [LintResult])? in
-                guard let ruleItems = byRule[key], let first = ruleItems.first else { return nil }
-                return (checkId: key, severity: first.severity, results: ruleItems)
-            }
-            result.append((category: cat, rules: rules))
-        }
-        return result
-    }
-
     // Visible summary (recalculated when filters are active)
     private var visibleSummary: LintSummary {
         if hiddenSeverities.isEmpty && selectedItem == nil { return lintSummary }
@@ -60,6 +44,7 @@ struct HealthOverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+
                 // Title bar
                 HStack(spacing: 12) {
                     Text("Config Health")
@@ -120,21 +105,21 @@ struct HealthOverviewView: View {
                         label: "Errors",
                         count: visibleSummary.errorCount,
                         color: Color(red: 0.886, green: 0.294, blue: 0.290),
-                        descriptor: errorDescriptor
+                        descriptor: severityDescriptors.error
                     )
 
                     HealthStatCard(
                         label: "Warnings",
                         count: visibleSummary.warningCount,
                         color: Color(red: 0.937, green: 0.624, blue: 0.153),
-                        descriptor: warningDescriptor
+                        descriptor: severityDescriptors.warning
                     )
 
                     HealthStatCard(
                         label: "Info",
                         count: visibleSummary.infoCount,
                         color: Color(red: 0.216, green: 0.541, blue: 0.867),
-                        descriptor: infoDescriptor
+                        descriptor: severityDescriptors.info
                     )
                 }
                 .padding(.horizontal, 24)
@@ -161,23 +146,50 @@ struct HealthOverviewView: View {
                 .padding(.horizontal, 24)
             }
             .padding(.vertical, 24)
+            .task(id: visibleResults.map(\.id)) {
+                let items = visibleResults
+
+                // groupedByRule
+                let ruleDict = Dictionary(grouping: items, by: \.checkId)
+                groupedByRule = ruleDict.keys.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { key in
+                    guard let ruleItems = ruleDict[key], let first = ruleItems.first else { return nil }
+                    return (checkId: key, severity: first.severity, results: ruleItems)
+                }
+
+                // groupedByCategory
+                let catDict = Dictionary(grouping: items) { categoryFor($0.checkId).id }
+                var catResult: [(category: CategoryDef, rules: [(checkId: LintCheckId, severity: LintSeverity, results: [LintResult])])] = []
+                let allCats = healthCategories + (catDict.keys.contains("other") ? [otherCategory] : [])
+                for cat in allCats.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+                    guard let catItems = catDict[cat.id], !catItems.isEmpty else { continue }
+                    let byRule = Dictionary(grouping: catItems, by: \.checkId)
+                    let rules = byRule.keys.sorted(by: { $0.rawValue < $1.rawValue }).compactMap { key -> (checkId: LintCheckId, severity: LintSeverity, results: [LintResult])? in
+                        guard let ruleItems = byRule[key], let first = ruleItems.first else { return nil }
+                        return (checkId: key, severity: first.severity, results: ruleItems)
+                    }
+                    catResult.append((category: cat, rules: rules))
+                }
+                groupedByCategory = catResult
+
+                // severity descriptors — single O(n) pass
+                var errorCats: Set<String> = []
+                var warningCats: Set<String> = []
+                var infoCats: Set<String> = []
+                for item in items {
+                    let label = categoryFor(item.checkId).label
+                    switch item.severity {
+                    case .error:   errorCats.insert(label)
+                    case .warning: warningCats.insert(label)
+                    case .info:    infoCats.insert(label)
+                    }
+                }
+                severityDescriptors = SeverityDescriptors(
+                    error:   errorCats.sorted().joined(separator: ", "),
+                    warning: warningCats.sorted().joined(separator: ", "),
+                    info:    infoCats.sorted().joined(separator: ", ")
+                )
+            }
         }
-    }
-
-    // Descriptors for stat cards
-    private var errorDescriptor: String {
-        let cats = Set(visibleResults.filter { $0.severity == .error }.map { categoryFor($0.checkId).label })
-        return cats.sorted().joined(separator: ", ")
-    }
-
-    private var warningDescriptor: String {
-        let cats = Set(visibleResults.filter { $0.severity == .warning }.map { categoryFor($0.checkId).label })
-        return cats.sorted().joined(separator: ", ")
-    }
-
-    private var infoDescriptor: String {
-        let cats = Set(visibleResults.filter { $0.severity == .info }.map { categoryFor($0.checkId).label })
-        return cats.sorted().joined(separator: ", ")
     }
 
     // MARK: - By Category View

@@ -7,7 +7,9 @@ struct CommandsSidebarContent: View {
     let commands: [CommandEntry]
     @Binding var selectedCommandName: String?
 
-    private var filtered: [CommandEntry] {
+    @State private var filtered: [CommandEntry] = []
+
+    private func computeFiltered() -> [CommandEntry] {
         if filterText.isEmpty { return commands }
         return commands.filter { cmd in
             cmd.name.localizedCaseInsensitiveContains(filterText) ||
@@ -16,21 +18,30 @@ struct CommandsSidebarContent: View {
     }
 
     var body: some View {
-        if filtered.isEmpty {
-            SidebarEmptyStateView(icon: "terminal", text: "No commands found")
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filtered) { cmd in
-                    CommandRow(
-                        command: cmd,
-                        isSelected: selectedCommandName == cmd.name
-                    ) {
-                        selectedCommandName = cmd.name
+        Group {
+            if filtered.isEmpty {
+                SidebarEmptyStateView(icon: "terminal", text: "No commands found")
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filtered) { cmd in
+                        CommandRow(
+                            command: cmd,
+                            isSelected: selectedCommandName == cmd.name
+                        ) {
+                            selectedCommandName = cmd.name
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
+        .onAppear { applyFilter() }
+        .onChange(of: filterText) { _ in applyFilter() }
+        .onChange(of: commands) { _ in applyFilter() }
+    }
+
+    private func applyFilter() {
+        filtered = computeFiltered()
     }
 }
 
@@ -77,27 +88,34 @@ struct CommandsMainPanelView: View {
     let commands: [CommandEntry]
     @Binding var selectedCommandName: String?
 
-    private var selectedCommand: CommandEntry? {
-        guard let name = selectedCommandName else { return nil }
-        return commands.first { $0.name == name }
-    }
+    @State private var selectedCommand: CommandEntry? = nil
 
     var body: some View {
-        if let command = selectedCommand {
-            commandDetailContent(command)
-        } else if commands.isEmpty {
-            EmptyStateView(
-                icon: "terminal",
-                title: "No commands found",
-                message: "Custom slash commands are .md files in ~/.claude/commands/"
-            )
-        } else {
-            EmptyStateView(
-                icon: "terminal",
-                title: "Select a command",
-                message: "Choose a command from the sidebar to view its contents."
-            )
+        Group {
+            if let command = selectedCommand {
+                commandDetailContent(command)
+            } else if commands.isEmpty {
+                EmptyStateView(
+                    icon: "terminal",
+                    title: "No commands found",
+                    message: "Custom slash commands are .md files in ~/.claude/commands/"
+                )
+            } else {
+                EmptyStateView(
+                    icon: "terminal",
+                    title: "Select a command",
+                    message: "Choose a command from the sidebar to view its contents."
+                )
+            }
         }
+        .onAppear { applySelectedCommand() }
+        .onChange(of: selectedCommandName) { _ in applySelectedCommand() }
+        .onChange(of: commands) { _ in applySelectedCommand() }
+    }
+
+    private func applySelectedCommand() {
+        guard let name = selectedCommandName else { selectedCommand = nil; return }
+        selectedCommand = commands.first { $0.name == name }
     }
 
     @ViewBuilder

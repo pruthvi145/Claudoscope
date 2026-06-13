@@ -322,11 +322,23 @@ private struct PluginDetail: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else {
+                let problematicDeps: Set<String> = Set(
+                    findings
+                        .filter { $0.checkId == .PLG001 }
+                        .compactMap { result -> String? in
+                            // Extract the quoted dependency name from the message.
+                            guard let start = result.message.range(of: "\"")?.upperBound,
+                                  let end = result.message[start...].range(of: "\"")?.lowerBound
+                            else { return nil }
+                            return String(result.message[start..<end])
+                        }
+                )
                 ForEach(dependencies, id: \.self) { dependency in
                     HStack(spacing: 8) {
-                        Image(systemName: dependencyHasIssue(dependency) ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        let hasIssue = problematicDeps.contains(dependency)
+                        Image(systemName: hasIssue ? "xmark.circle.fill" : "checkmark.circle.fill")
                             .font(.system(size: 11))
-                            .foregroundStyle(dependencyHasIssue(dependency) ? .orange : .green)
+                            .foregroundStyle(hasIssue ? .orange : .green)
                         Text(dependency)
                             .font(Typography.code)
                             .textSelection(.enabled)
@@ -356,10 +368,6 @@ private struct PluginDetail: View {
                 Spacer()
             }
         }
-    }
-
-    private func dependencyHasIssue(_ dependency: String) -> Bool {
-        findings.contains { $0.checkId == .PLG001 && $0.message.contains("\"\(dependency)\"") }
     }
 
     private func severityIcon(_ severity: LintSeverity) -> String {
@@ -392,6 +400,7 @@ private struct PluginComponentSheet: View {
     @State private var loaded: String?
     @State private var searchText = ""
     @State private var matchCursor = 0   // index into matchBlocks
+    @State private var matchBlocks: [Int] = []
 
     private var rawContent: String { loaded ?? "" }
 
@@ -401,10 +410,11 @@ private struct PluginComponentSheet: View {
         parseFrontmatter(rawContent)
     }
 
+    /// Recomputes `matchBlocks` for the given query string.
     /// Offsets of body blocks containing the query; same `parseMarkdown` input as
     /// the renderer, so offsets line up with `RichMarkdownContentView`'s block ids.
-    private var matchBlocks: [Int] {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
+    private func computeMatchBlocks(for query: String) -> [Int] {
+        let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return [] }
         return parseMarkdown(parsed.body).enumerated()
             .filter { blockPlainText($0.element).localizedCaseInsensitiveContains(q) }
@@ -549,7 +559,8 @@ private struct PluginComponentSheet: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar.opacity(0.5))
-        .onChange(of: searchText) { _, _ in
+        .onChange(of: searchText) { _, newValue in
+            matchBlocks = computeMatchBlocks(for: newValue)
             matchCursor = 0
             scrollToActive(proxy)
         }

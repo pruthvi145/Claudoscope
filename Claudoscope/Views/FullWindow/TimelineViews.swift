@@ -8,66 +8,131 @@ struct TimelineSidebarContent: View {
     @Binding var selectedDay: String?
     var onSelect: ((HistoryEntry) -> Void)?
 
-    private var filteredEntries: [HistoryEntry] {
-        if filterText.isEmpty { return entries }
-        return entries.filter { entry in
-            entry.display.localizedCaseInsensitiveContains(filterText) ||
-            (entry.project?.localizedCaseInsensitiveContains(filterText) ?? false) ||
-            (entry.sessionId?.localizedCaseInsensitiveContains(filterText) ?? false)
+    // Flattened, virtualized rows so the ENTIRE list is a single LazyVStack.
+    // Previously each day's entries lived in a non-lazy ForEach inside daySection,
+    // so a day with hundreds of entries built every row the moment its header hit
+    // the viewport. A flat [Row] in one LazyVStack builds only the ~30 rows
+    // actually on screen, regardless of total entry count. The grouping/sort that
+    // produces these rows is memoized into @State below so it runs once per
+    // (filterText, entries) change instead of on every body re-evaluation.
+    private enum Row: Identifiable {
+        case header(dayLabel: String, count: Int)
+        case entry(HistoryEntry)
+        var id: String {
+            switch self {
+            case .header(let dayLabel, _): return "h-\(dayLabel)"
+            case .entry(let entry): return "e-\(entry.id)"
+            }
         }
     }
 
-    private var groupedByDay: [(key: String, entries: [HistoryEntry])] {
-        let calendar = Calendar.current
+    // Memoized derived data. `rows` is recomputed only in .task(id:) when the
+    // filter text or the entries array changes — NOT on every scroll/selection
+    // redraw. `isEmpty` mirrors the prior `filteredEntries.isEmpty` check.
+    @State private var rows: [Row] = []
+    @State private var isEmpty = true
 
-        let grouped = Dictionary(grouping: filteredEntries) { entry -> String in
+    private static func computeRows(filterText: String, entries: [HistoryEntry]) -> [Row] {
+        let filtered: [HistoryEntry]
+        if filterText.isEmpty {
+            filtered = entries
+        } else {
+            filtered = entries.filter { entry in
+                entry.display.localizedCaseInsensitiveContains(filterText) ||
+                (entry.project?.localizedCaseInsensitiveContains(filterText) ?? false) ||
+                (entry.sessionId?.localizedCaseInsensitiveContains(filterText) ?? false)
+            }
+        }
+
+        if filtered.isEmpty { return [] }
+
+        let calendar = Calendar.current
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "EEE, MMM d"
+
+        let grouped = Dictionary(grouping: filtered) { entry -> String in
             if calendar.isDateInToday(entry.timestamp) {
                 return "Today"
             } else if calendar.isDateInYesterday(entry.timestamp) {
                 return "Yesterday"
             } else {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "EEE, MMM d"
-                return formatter.string(from: entry.timestamp)
+                return dayFormatter.string(from: entry.timestamp)
             }
         }
 
-        // Sort groups by the newest entry in each group
-        return grouped
+        // Sort groups by the newest entry in each group (preserves prior ordering).
+        let sortedGroups = grouped
             .map { (key: $0.key, entries: $0.value.sorted { $0.timestamp > $1.timestamp }) }
             .sorted { groupA, groupB in
                 let dateA = groupA.entries.first?.timestamp ?? .distantPast
                 let dateB = groupB.entries.first?.timestamp ?? .distantPast
                 return dateA > dateB
             }
+
+        var result: [Row] = []
+        for group in sortedGroups {
+            result.append(.header(dayLabel: group.key, count: group.entries.count))
+            for entry in group.entries {
+                result.append(.entry(entry))
+            }
+        }
+        return result
     }
 
     var body: some View {
-        if filteredEntries.isEmpty {
-            VStack(spacing: 8) {
-                Spacer()
-                Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.quaternary)
-                Text("No history found")
-                    .font(Typography.body)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 40)
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(groupedByDay, id: \.key) { group in
-                    daySection(group.key, entries: group.entries)
+        Group {
+            if isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.quaternary)
+                    Text("No history found")
+                        .font(Typography.body)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(rows) { row in
+                        switch row {
+                        case .header(let dayLabel, let count):
+                            dayHeaderRow(dayLabel, count: count)
+                        case .entry(let entry):
+                            TimelineSidebarRow(entry: entry) {
+                                onSelect?(entry)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+        }
+        // Recompute the memoized rows only when the inputs actually change — the
+        // filter text or the entries array. A single signature-keyed .task fires
+        // on first appearance and on any change, so the O(n) grouping/filter runs
+        // once per change instead of on every body/scroll re-evaluation.
+        .task(id: rowsSignature) {
+            rebuildRows()
         }
     }
 
+    // Cheap, stable identity for (filterText, entries). Detects a real input
+    // change without requiring HistoryEntry to be Equatable.
+    private var rowsSignature: String {
+        "\(filterText)|\(entries.count)|\(entries.first?.id ?? "")|\(entries.last?.id ?? "")"
+    }
+
+    private func rebuildRows() {
+        let computed = Self.computeRows(filterText: filterText, entries: entries)
+        rows = computed
+        isEmpty = computed.isEmpty
+    }
+
     @ViewBuilder
-    private func daySection(_ dayLabel: String, entries: [HistoryEntry]) -> some View {
+    private func dayHeaderRow(_ dayLabel: String, count: Int) -> some View {
         Button {
             selectedDay = (selectedDay == dayLabel) ? nil : dayLabel
         } label: {
@@ -76,7 +141,7 @@ struct TimelineSidebarContent: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(selectedDay == dayLabel ? .white : .secondary)
 
-                Text("\(entries.count)")
+                Text("\(count)")
                     .font(Typography.caption)
                     .foregroundStyle(selectedDay == dayLabel ? AnyShapeStyle(.white.opacity(0.7)) : AnyShapeStyle(.tertiary))
                     .padding(.horizontal, 5)
@@ -95,12 +160,6 @@ struct TimelineSidebarContent: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-
-        ForEach(entries) { entry in
-            TimelineSidebarRow(entry: entry) {
-                onSelect?(entry)
-            }
-        }
     }
 }
 
@@ -160,6 +219,25 @@ struct TimelineMainPanelView: View {
     @Environment(SessionStore.self) private var store
     @State private var expandedEntries: Set<String> = []
 
+    // Memoized grouping of `entries` by day. Previously this was a computed
+    // property recomputed (O(n log n)) on every ScrollView/body re-evaluation,
+    // including every scroll tick. Now it is rebuilt once into @State whenever the
+    // entries change (keyed by entries.count in .task) instead of per render.
+    @State private var groupedByDayCache: [(key: String, entries: [HistoryEntry])] = []
+
+    // Pre-computed sessionId -> (title, projectId) lookup. The previous
+    // sessionInfo() scanned every project and every session (O(projects*sessions))
+    // for EACH visible row. This dictionary makes the per-row lookup O(1). Rebuilt
+    // only when store.sessionsByProject changes.
+    @State private var sessionLookup: [String: (title: String, projectId: String)] = [:]
+
+    // Pre-computed relative time strings keyed by entry.id. Avoids re-running
+    // Date()-arithmetic + DateFormatter per visible row on every scroll/render.
+    // Rebuilt when entries change or when refreshed on the periodic timer below so
+    // "now"/"Nm" labels still advance as wall-clock time passes (same cadence the
+    // old per-render computation effectively produced).
+    @State private var timeStringCache: [String: String] = [:]
+
     private static let projectColors: [Color] = [
         .blue, .green, .orange, .pink, .indigo, .yellow
     ]
@@ -186,7 +264,7 @@ struct TimelineMainPanelView: View {
         return f
     }()
 
-    private var groupedByDay: [(key: String, entries: [HistoryEntry])] {
+    private static func computeGroupedByDay(_ entries: [HistoryEntry]) -> [(key: String, entries: [HistoryEntry])] {
         let calendar = Calendar.current
 
         let grouped = Dictionary(grouping: entries) { entry -> String in
@@ -208,6 +286,31 @@ struct TimelineMainPanelView: View {
             }
     }
 
+    private static func computeSessionLookup(_ sessionsByProject: [String: [SessionSummary]]) -> [String: (title: String, projectId: String)] {
+        var lookup: [String: (title: String, projectId: String)] = [:]
+        for (projectId, sessions) in sessionsByProject {
+            for session in sessions {
+                // Preserve prior semantics: the old linear scan returned the FIRST
+                // match it found. Don't overwrite an existing entry so the same
+                // session id resolves to the same (title, projectId) as before.
+                if lookup[session.id] == nil {
+                    lookup[session.id] = (session.title, projectId)
+                }
+            }
+        }
+        return lookup
+    }
+
+    private static func computeTimeStrings(_ entries: [HistoryEntry]) -> [String: String] {
+        let now = Date()
+        var cache: [String: String] = [:]
+        cache.reserveCapacity(entries.count)
+        for entry in entries {
+            cache[entry.id] = smartTimeString(entry.timestamp, now: now)
+        }
+        return cache
+    }
+
     var body: some View {
         Group {
             if isLoading {
@@ -224,12 +327,48 @@ struct TimelineMainPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Rebuild the day grouping and the relative-time cache once when entries
+        // change, instead of recomputing them on every body/scroll evaluation.
+        // Then refresh just the relative-time labels every 60s so "now"/"Nm" still
+        // advance with the wall clock (matching the old per-render behavior),
+        // without redoing the expensive grouping/lookups. The signature changes
+        // whenever the entries array changes (count + first/last id), so a content
+        // swap that keeps the same count still triggers a rebuild.
+        .task(id: entriesSignature) {
+            groupedByDayCache = Self.computeGroupedByDay(entries)
+            timeStringCache = Self.computeTimeStrings(entries)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                if Task.isCancelled { break }
+                timeStringCache = Self.computeTimeStrings(entries)
+            }
+        }
+        // Rebuild the O(1) session lookup only when the source map changes.
+        .task(id: sessionsSignature) {
+            sessionLookup = Self.computeSessionLookup(store.sessionsByProject)
+        }
+    }
+
+    // Cheap, stable identity for the entries array. Avoids requiring HistoryEntry
+    // to be Equatable while still detecting real changes (append/prepend/reload).
+    private var entriesSignature: String {
+        "\(entries.count)|\(entries.first?.id ?? "")|\(entries.last?.id ?? "")"
+    }
+
+    // Cheap identity for the session map: project count plus per-project session
+    // counts. Changes when sessions are added/removed anywhere in the map.
+    private var sessionsSignature: String {
+        let perProject = store.sessionsByProject
+            .map { "\($0.key):\($0.value.count)" }
+            .sorted()
+            .joined(separator: ",")
+        return "\(store.sessionsByProject.count)|\(perProject)"
     }
 
     private var timelineContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(groupedByDay, id: \.key) { group in
+                ForEach(groupedByDayCache, id: \.key) { group in
                     dayHeader(group.key, count: group.entries.count)
 
                     ForEach(Array(group.entries.enumerated()), id: \.element.id) { index, entry in
@@ -296,7 +435,7 @@ struct TimelineMainPanelView: View {
                         .font(Typography.micro)
                         .foregroundStyle(.quaternary)
                 }
-                Text(smartTimeString(entry.timestamp))
+                Text(timeStringCache[entry.id] ?? Self.smartTimeString(entry.timestamp))
                     .font(Typography.codeSmall)
                     .foregroundStyle(.tertiary)
             }
@@ -461,6 +600,12 @@ struct TimelineMainPanelView: View {
 
     private func sessionInfo(for sessionId: String?) -> (title: String, projectId: String, sessionId: String)? {
         guard let sessionId else { return nil }
+        // O(1) lookup against the pre-computed cache. Falls back to a direct scan
+        // only if the cache hasn't populated yet (e.g. first render before .task),
+        // preserving the exact prior result either way.
+        if let cached = sessionLookup[sessionId] {
+            return (cached.title, cached.projectId, sessionId)
+        }
         for (projectId, sessions) in store.sessionsByProject {
             if let match = sessions.first(where: { $0.id == sessionId }) {
                 return (match.title, projectId, sessionId)
@@ -469,8 +614,8 @@ struct TimelineMainPanelView: View {
         return nil
     }
 
-    private func smartTimeString(_ date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
+    private static func smartTimeString(_ date: Date, now: Date = Date()) -> String {
+        let interval = now.timeIntervalSince(date)
         if interval < 60 {
             return "now"
         } else if interval < 3600 {

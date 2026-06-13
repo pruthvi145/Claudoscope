@@ -7,7 +7,26 @@ struct McpsSidebarContent: View {
     let mcpServers: [McpServerEntry]
     @Binding var selectedMcpName: String?
 
-    private var filtered: [McpServerEntry] {
+    // Memoized filter result. Previously `filtered` was a computed property that
+    // re-ran the O(n) localizedCaseInsensitiveContains scan across 3 fields on
+    // EVERY body re-evaluation — i.e. on every keystroke the body re-evaluated
+    // and filtered multiple times. Hoisting the result into @State and rebuilding
+    // it only inside .task(id:) means the scan runs once per actual change of the
+    // filter text or the server set, not once per render. Behaviour is identical:
+    // empty filter -> all servers, otherwise the same predicate over the same fields.
+    @State private var filtered: [McpServerEntry] = []
+
+    // Stable identity for the inputs that affect `filtered`. Changing either the
+    // query or the underlying server identities re-triggers the filter; a pure
+    // re-render with unchanged inputs does not.
+    private var filterKey: String {
+        filterText + "\u{0}" + mcpServers.map(\.id).joined(separator: "\u{0}")
+    }
+
+    private static func computeFiltered(
+        filterText: String,
+        mcpServers: [McpServerEntry]
+    ) -> [McpServerEntry] {
         if filterText.isEmpty { return mcpServers }
         return mcpServers.filter { server in
             server.name.localizedCaseInsensitiveContains(filterText) ||
@@ -17,20 +36,25 @@ struct McpsSidebarContent: View {
     }
 
     var body: some View {
-        if filtered.isEmpty {
-            SidebarEmptyStateView(icon: "point.3.connected.trianglepath.dotted", text: "No MCP servers found")
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filtered) { server in
-                    McpServerRow(
-                        server: server,
-                        isSelected: selectedMcpName == server.name
-                    ) {
-                        selectedMcpName = server.name
+        Group {
+            if filtered.isEmpty {
+                SidebarEmptyStateView(icon: "point.3.connected.trianglepath.dotted", text: "No MCP servers found")
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filtered) { server in
+                        McpServerRow(
+                            server: server,
+                            isSelected: selectedMcpName == server.name
+                        ) {
+                            selectedMcpName = server.name
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+        }
+        .task(id: filterKey) {
+            filtered = Self.computeFiltered(filterText: filterText, mcpServers: mcpServers)
         }
     }
 }

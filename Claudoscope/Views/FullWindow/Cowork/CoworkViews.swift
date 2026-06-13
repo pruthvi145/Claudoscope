@@ -10,7 +10,12 @@ struct CoworkSidebarContent: View {
     let pricingTable: [String: ModelPricing]
     @Binding var selectedSessionId: String?
 
-    private var filtered: [CoworkSession] {
+    // Filtering ran on every body re-eval (e.g. per scroll/selection change).
+    // Now computed once when the filter text or session list changes, stored
+    // in @State, and seeded on appear.
+    @State private var filtered: [CoworkSession] = []
+
+    private static func computeFiltered(_ sessions: [CoworkSession], filterText: String) -> [CoworkSession] {
         guard !filterText.isEmpty else { return sessions }
         return sessions.filter { s in
             s.displayTitle.localizedCaseInsensitiveContains(filterText) ||
@@ -21,23 +26,34 @@ struct CoworkSidebarContent: View {
     }
 
     var body: some View {
-        if filtered.isEmpty {
-            SidebarEmptyStateView(icon: "sparkles", text: "No Cowork sessions found")
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filtered) { session in
-                    CoworkRow(
-                        session: session,
-                        cost: parsedSessionsByID[session.id].map {
-                            CoworkStats.totalCost(records: $0.records, pricingTable: pricingTable)
-                        },
-                        isSelected: selectedSessionId == session.id
-                    ) {
-                        selectedSessionId = session.id
+        Group {
+            if filtered.isEmpty {
+                SidebarEmptyStateView(icon: "sparkles", text: "No Cowork sessions found")
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filtered) { session in
+                        CoworkRow(
+                            session: session,
+                            cost: parsedSessionsByID[session.id].map {
+                                CoworkStats.totalCost(records: $0.records, pricingTable: pricingTable)
+                            },
+                            isSelected: selectedSessionId == session.id
+                        ) {
+                            selectedSessionId = session.id
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+        }
+        .onAppear {
+            filtered = Self.computeFiltered(sessions, filterText: filterText)
+        }
+        .onChange(of: filterText) { _, newValue in
+            filtered = Self.computeFiltered(sessions, filterText: newValue)
+        }
+        .onChange(of: sessions) { _, newValue in
+            filtered = Self.computeFiltered(newValue, filterText: filterText)
         }
     }
 }
@@ -215,6 +231,9 @@ private struct CoworkHeader: View {
 private struct CoworkMetadataCard: View {
     let session: CoworkSession
 
+    // Cache the cwd existence check instead of hitting FileManager during render.
+    @State private var cwdExists = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             row("Process name", value: session.processName)
@@ -245,6 +264,13 @@ private struct CoworkMetadataCard: View {
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 16)
+        .task(id: session.cwd) {
+            if let cwd = session.cwd, !cwd.isEmpty {
+                cwdExists = FileManager.default.fileExists(atPath: cwd)
+            } else {
+                cwdExists = false
+            }
+        }
     }
 
     @ViewBuilder
@@ -275,7 +301,7 @@ private struct CoworkMetadataCard: View {
                     .frame(width: 130, alignment: .leading)
                 Button {
                     let url = URL(fileURLWithPath: cwd)
-                    if FileManager.default.fileExists(atPath: cwd) {
+                    if cwdExists {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                 } label: {
@@ -308,9 +334,10 @@ private struct CoworkStatsCard: View {
     let records: [ParsedRecordRaw]
     let pricingTable: [String: ModelPricing]
 
-    private var totals: CoworkStats.Totals {
-        CoworkStats.totals(records: records, pricingTable: pricingTable)
-    }
+    // `totals` walked every record on every body re-eval. Compute once when the
+    // records change (keyed on a stable count signature, since ParsedRecordRaw
+    // is not Equatable) and store in @State — mirrors ChatView.turnDurations.
+    @State private var totals = CoworkStats.Totals()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -354,6 +381,9 @@ private struct CoworkStatsCard: View {
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 16)
+        .task(id: records.count) {
+            totals = CoworkStats.totals(records: records, pricingTable: pricingTable)
+        }
     }
 
     @ViewBuilder
@@ -372,6 +402,10 @@ private struct CoworkStatsCard: View {
 private struct CoworkGeneratedFilesList: View {
     let files: [String]
 
+    // Existence was checked via FileManager per row on every body re-eval (sync
+    // I/O in the render path). Precompute once per file list in `.task(id:)`.
+    @State private var fileExistenceMap: [String: Bool] = [:]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Generated files")
@@ -386,7 +420,7 @@ private struct CoworkGeneratedFilesList: View {
                         .font(.system(size: 12))
                         .lineLimit(1)
                     Spacer()
-                    if FileManager.default.fileExists(atPath: path) {
+                    if fileExistenceMap[path] == true {
                         Button {
                             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                         } label: {
@@ -404,6 +438,13 @@ private struct CoworkGeneratedFilesList: View {
             }
         }
         .padding(.horizontal, 16)
+        .task(id: files) {
+            var map: [String: Bool] = [:]
+            for path in files {
+                map[path] = FileManager.default.fileExists(atPath: path)
+            }
+            fileExistenceMap = map
+        }
     }
 }
 

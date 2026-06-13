@@ -7,42 +7,52 @@ struct PlansSidebarContent: View {
     let plans: [PlanSummary]
     @Binding var selectedPlanFilename: String?
 
-    private var filteredPlans: [PlanSummary] {
-        if filterText.isEmpty { return plans }
-        return plans.filter { plan in
-            plan.title.localizedCaseInsensitiveContains(filterText) ||
-            (plan.projectHint?.localizedCaseInsensitiveContains(filterText) ?? false) ||
-            plan.filename.localizedCaseInsensitiveContains(filterText)
+    @State private var filteredPlans: [PlanSummary] = []
+
+    private func applyFilter() {
+        if filterText.isEmpty {
+            filteredPlans = plans
+        } else {
+            filteredPlans = plans.filter { plan in
+                plan.title.localizedCaseInsensitiveContains(filterText) ||
+                (plan.projectHint?.localizedCaseInsensitiveContains(filterText) ?? false) ||
+                plan.filename.localizedCaseInsensitiveContains(filterText)
+            }
         }
     }
 
     var body: some View {
-        if filteredPlans.isEmpty {
-            VStack(spacing: 8) {
-                Spacer()
-                Image(systemName: "doc.text")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.quaternary)
-                Text("No plans found")
-                    .font(Typography.body)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 40)
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filteredPlans) { plan in
-                    PlanRow(
-                        plan: plan,
-                        isSelected: selectedPlanFilename == plan.filename
-                    ) {
-                        selectedPlanFilename = plan.filename
+        Group {
+            if filteredPlans.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.quaternary)
+                    Text("No plans found")
+                        .font(Typography.body)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filteredPlans) { plan in
+                        PlanRow(
+                            plan: plan,
+                            isSelected: selectedPlanFilename == plan.filename
+                        ) {
+                            selectedPlanFilename = plan.filename
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
+        .onAppear { applyFilter() }
+        .onChange(of: filterText) { applyFilter() }
+        .onChange(of: plans.map(\.filename)) { applyFilter() }
     }
 }
 

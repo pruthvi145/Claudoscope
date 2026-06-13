@@ -6,8 +6,20 @@ struct MarkdownContentView: View {
     let content: String
     var fontSize: CGFloat = 13
 
+    // Cached parse result. Populated once per `content` change via `.task(id:)`
+    // instead of recomputing `parseMarkdown(content)` on every body evaluation.
+    @State private var cachedBlocks: [MarkdownBlock] = []
+    // Tracks which content `cachedBlocks` corresponds to, so the first render
+    // (before `.task` runs) and any content change still show correct output.
+    @State private var parsedContent: String? = nil
+
     private var blocks: [MarkdownBlock] {
-        parseMarkdown(content)
+        // Use the cache only when it matches the current content; otherwise
+        // fall back to parsing synchronously so output is never stale/empty.
+        if parsedContent == content {
+            return cachedBlocks
+        }
+        return parseMarkdown(content)
     }
 
     var body: some View {
@@ -15,6 +27,10 @@ struct MarkdownContentView: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
+        }
+        .task(id: content) {
+            cachedBlocks = parseMarkdown(content)
+            parsedContent = content
         }
     }
 

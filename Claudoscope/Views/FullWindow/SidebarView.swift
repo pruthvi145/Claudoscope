@@ -366,13 +366,24 @@ private struct AnalyticsSidebarContent: View {
     let timeRangeLabel: String
     @Binding var selectedProjectId: String?
 
-    var filtered: [ProjectCost] {
-        if filterText.isEmpty { return projectCosts }
-        return projectCosts.filter { $0.projectName.localizedCaseInsensitiveContains(filterText) }
-    }
+    // Memoized filter result. Previously `filtered` was a computed property that
+    // re-ran `localizedCaseInsensitiveContains` over every ProjectCost on EVERY
+    // body evaluation — i.e. on every keystroke in the filter field (and on every
+    // unrelated re-render). `maxCost` depended on it, so the O(n) scan ran twice
+    // per render. Now the scan runs once per (filterText, projectCosts) change in
+    // a side effect, and `maxCost` is derived alongside it. Same visible output.
+    @State private var filtered: [ProjectCost] = []
+    @State private var maxCost: Double = 1
 
-    var maxCost: Double {
-        filtered.map(\.totalCost).max() ?? 1
+    private func recomputeFiltered() {
+        let result: [ProjectCost]
+        if filterText.isEmpty {
+            result = projectCosts
+        } else {
+            result = projectCosts.filter { $0.projectName.localizedCaseInsensitiveContains(filterText) }
+        }
+        filtered = result
+        maxCost = result.map(\.totalCost).max() ?? 1
     }
 
     private let barColors: [Color] = [
@@ -414,6 +425,9 @@ private struct AnalyticsSidebarContent: View {
             }
         }
         .padding(.vertical, 4)
+        .onAppear { recomputeFiltered() }
+        .onChange(of: filterText) { _, _ in recomputeFiltered() }
+        .onChange(of: projectCosts) { _, _ in recomputeFiltered() }
     }
 }
 

@@ -197,6 +197,14 @@ struct WhatIfSavings: Sendable {
     let savings: Double
     let savingsPercent: Double
     let turnsAffected: Int
+
+    static let empty = WhatIfSavings(
+        currentCost: 0,
+        hypotheticalCost: 0,
+        savings: 0,
+        savingsPercent: 0,
+        turnsAffected: 0
+    )
 }
 
 struct DailyUsage: Identifiable, Sendable {
@@ -213,7 +221,7 @@ struct DailyUsage: Identifiable, Sendable {
     var estimatedCost: Double
 }
 
-struct ProjectCost: Identifiable, Sendable {
+struct ProjectCost: Identifiable, Sendable, Equatable {
     var id: String { projectId }
     let projectId: String
     let projectName: String

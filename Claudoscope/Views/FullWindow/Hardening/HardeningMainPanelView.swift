@@ -24,6 +24,10 @@ struct HardeningMainPanelView: View {
     @State private var actionInProgress: ActionKind?
     @State private var actionResult: ActionResult?
 
+    // Precomputed caches — populated whenever lintResults changes
+    @State private var severityCountCache: [LintSeverity: Int] = [:]
+    @State private var layerFailingCountCache: [String: Int] = [:]
+
     private var hrdResults: [LintResult] {
         lintResults.filter { $0.checkId.rawValue.hasPrefix("HRD") }
     }
@@ -58,6 +62,19 @@ struct HardeningMainPanelView: View {
             if lintResults.isEmpty {
                 await store.runConfigLintIfNeeded(projectId: nil)
             }
+        }
+        .task(id: lintResults.count) {
+            let filtered = lintResults.filter { $0.checkId.rawValue.hasPrefix("HRD") }
+            var severities: [LintSeverity: Int] = [:]
+            var layers: [String: Int] = [:]
+            for result in filtered {
+                severities[result.severity, default: 0] += 1
+                for spec in LayerCardSpec.all where spec.matches(result.checkId.rawValue) {
+                    layers[spec.id, default: 0] += 1
+                }
+            }
+            severityCountCache = severities
+            layerFailingCountCache = layers
         }
         .sheet(isPresented: $showInstallSheet) {
             HardeningInstallSheet(
@@ -241,7 +258,7 @@ struct HardeningMainPanelView: View {
     }
 
     private func descriptor(for severity: LintSeverity) -> String {
-        let count = hrdResults.filter { $0.severity == severity }.count
+        let count = severityCountCache[severity] ?? 0
         return count == 0 ? "Clean" : "\(count) HRD"
     }
 
@@ -407,7 +424,7 @@ struct HardeningMainPanelView: View {
     }
 
     private func failingCount(in spec: LayerCardSpec) -> Int {
-        hrdResults.filter { spec.matches($0.checkId.rawValue) }.count
+        layerFailingCountCache[spec.id] ?? 0
     }
 
     // MARK: Quick actions

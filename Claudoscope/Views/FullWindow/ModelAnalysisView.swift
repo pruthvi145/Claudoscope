@@ -5,15 +5,13 @@ struct ModelAnalysisView: View {
     @Environment(SessionStore.self) private var store
     @State private var outputThreshold: Int = 200
 
-    private var data: AnalyticsData { store.analyticsData }
+    // Memoized: recomputed only when `outputThreshold` changes (via .task(id:)),
+    // not on every body re-evaluation. computeWhatIfSavings is O(n·m) over all
+    // sessions and their model breakdowns, so re-running it per Stepper-driven
+    // body rebuild caused interaction lag with large session counts.
+    @State private var whatIfSavings: WhatIfSavings = .empty
 
-    private var whatIfSavings: WhatIfSavings {
-        AnalyticsEngine.computeWhatIfSavings(
-            sessions: store.allSessionsWithProjects,
-            pricingTable: store.pricingTable,
-            outputThreshold: outputThreshold
-        )
-    }
+    private var data: AnalyticsData { store.analyticsData }
 
     var body: some View {
         ScrollView {

@@ -20,21 +20,21 @@ enum HookSource: Sendable, Hashable {
     }
 }
 
-struct HookCommand: Sendable {
+struct HookCommand: Equatable, Sendable {
     let type: String?       // "command"
     let command: String
     let timeout: Int?
     var terminalSequence: String? = nil   // hook terminalSequence field (CC 2.1.141)
 }
 
-struct HookRule: Identifiable, Sendable {
+struct HookRule: Identifiable, Equatable, Sendable {
     let id: String          // generated UUID
     let matcher: String     // tool matcher, or "*" for catch-all
     let hooks: [HookCommand]
     let source: HookSource
 }
 
-struct HookEventGroup: Identifiable, Sendable {
+struct HookEventGroup: Identifiable, Equatable, Sendable {
     var id: String { event }
     let event: String       // "PreToolUse", "PostToolUse", etc.
     let rules: [HookRule]
@@ -54,7 +54,7 @@ struct McpServerEntry: Identifiable, Sendable {
 
 // MARK: - Command Models
 
-struct CommandEntry: Identifiable, Sendable {
+struct CommandEntry: Identifiable, Equatable, Sendable {
     var id: String { name }
     let name: String
     let description: String?

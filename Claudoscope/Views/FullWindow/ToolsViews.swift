@@ -8,95 +8,118 @@ struct ToolsSidebarContent: View {
     let filterText: String
     @Binding var selectedSessionId: String?
     @Binding var selectedProjectId: String?
+    // Collapse state lifted out of the per-project view so the whole list can be
+    // ONE flat LazyVStack (mirrors SessionsSidebarContent). Empty = every project
+    // expanded, matching the prior `isExpanded = true` default.
+    @State private var collapsedProjects: Set<String> = []
 
-    var filteredProjects: [Project] {
-        if filterText.isEmpty { return projects }
-        return projects.filter { project in
-            project.name.localizedCaseInsensitiveContains(filterText) ||
-            visibleSessions(for: project).contains { session in
-                session.title.localizedCaseInsensitiveContains(filterText)
+    // Flattened rows so the ENTIRE list is virtualized. Previously each project's
+    // sessions lived in a non-lazy ForEach inside its ToolsProjectGroup, so a
+    // project with thousands of sessions built every row the moment it hit the
+    // viewport. A single LazyVStack over a flat [Row] builds only the rows on
+    // screen, regardless of total session count.
+    private enum Row: Identifiable {
+        case header(project: Project, count: Int)
+        case session(SessionSummary, projectId: String)
+        var id: String {
+            switch self {
+            case .header(let project, _): return "h-\(project.id)"
+            case .session(let session, _): return "s-\(session.id)"
             }
         }
+    }
+
+    private var rows: [Row] {
+        let filtering = !filterText.isEmpty
+        var result: [Row] = []
+        for project in projects {
+            // Subagents are hidden — see SidebarView for rationale.
+            let visible = (sessionsByProject[project.id] ?? []).filter { !$0.isSubagent }
+            let matching: [SessionSummary]
+            if filtering {
+                let titleMatched = visible.filter { $0.title.localizedCaseInsensitiveContains(filterText) }
+                let nameMatches = project.name.localizedCaseInsensitiveContains(filterText)
+                if !nameMatches && titleMatched.isEmpty { continue }
+                matching = titleMatched
+            } else {
+                matching = visible
+            }
+            result.append(.header(project: project, count: matching.count))
+            if !collapsedProjects.contains(project.id) {
+                for session in matching {
+                    result.append(.session(session, projectId: project.id))
+                }
+            }
+        }
+        return result
     }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(filteredProjects) { project in
-                ToolsProjectGroup(
-                    project: project,
-                    sessions: filteredSessions(for: project),
-                    selectedSessionId: $selectedSessionId,
-                    selectedProjectId: $selectedProjectId
-                )
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    // Subagents are hidden — see SidebarView for rationale.
-    private func visibleSessions(for project: Project) -> [SessionSummary] {
-        (sessionsByProject[project.id] ?? []).filter { !$0.isSubagent }
-    }
-
-    private func filteredSessions(for project: Project) -> [SessionSummary] {
-        let sessions = visibleSessions(for: project)
-        if filterText.isEmpty { return sessions }
-        return sessions.filter { $0.title.localizedCaseInsensitiveContains(filterText) }
-    }
-}
-
-private struct ToolsProjectGroup: View {
-    let project: Project
-    let sessions: [SessionSummary]
-    @Binding var selectedSessionId: String?
-    @Binding var selectedProjectId: String?
-    @State private var isExpanded = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: Motion.quick)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12)
-
-                    Text(project.name)
-                        .font(Typography.bodyMedium)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    Text("\(sessions.count)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(Capsule())
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                ForEach(sessions) { session in
+            ForEach(rows) { row in
+                switch row {
+                case .header(let project, let count):
+                    ToolsProjectHeaderRow(
+                        name: project.name,
+                        count: count,
+                        isExpanded: !collapsedProjects.contains(project.id)
+                    ) {
+                        if collapsedProjects.contains(project.id) {
+                            collapsedProjects.remove(project.id)
+                        } else {
+                            collapsedProjects.insert(project.id)
+                        }
+                    }
+                case .session(let session, let projectId):
                     ToolsSessionRow(
                         session: session,
                         isSelected: selectedSessionId == session.id
                     ) {
                         selectedSessionId = session.id
-                        selectedProjectId = project.id
+                        selectedProjectId = projectId
                     }
                 }
             }
         }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ToolsProjectHeaderRow: View {
+    let name: String
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: Motion.quick)) { onToggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12)
+
+                Text(name)
+                    .font(Typography.bodyMedium)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -161,16 +184,35 @@ struct ToolsMainPanelView: View {
     @State private var grouping: ToolGrouping = .flat
     @State private var expandedEntries: Set<String> = []
 
-    private var entries: [ToolCallEntry] {
-        extractToolCalls(from: session)
+    // Session-derived data, extracted once per session via `.task(id: session.id)`
+    // instead of on every body evaluation. `extractToolCalls` walks every record
+    // and `computeToolAnalytics` scans all entries — doing that work on each render
+    // (and each keystroke) was the main cost. `analytics` is derived in the same
+    // task right after `entries`, so the two never disagree.
+    @State private var entries: [ToolCallEntry] = []
+    @State private var analytics: ToolAnalytics = .empty
+
+    // Filter result, recomputed only when an input actually changes (the filter
+    // fields, or the underlying entries) rather than on every render. Previously
+    // this O(n) `localizedCaseInsensitiveContains` scan ran on every body eval and
+    // was read once per row.
+    @State private var filteredEntries: [ToolCallEntry] = []
+
+    // Grouped views of `filteredEntries`, memoized so the `Dictionary(grouping:)`
+    // work happens once per filter change instead of on every body evaluation of
+    // the (lazy) tool-call list. Derived alongside `filteredEntries`.
+    @State private var groupedByTurn: [(turn: Int, entries: [ToolCallEntry])] = []
+    @State private var groupedByCategory: [ToolCategory: [ToolCallEntry]] = [:]
+
+    private func computeEntries() {
+        let extracted = extractToolCalls(from: session)
+        entries = extracted
+        analytics = computeToolAnalytics(extracted)
+        recomputeFiltered()
     }
 
-    private var analytics: ToolAnalytics {
-        computeToolAnalytics(entries)
-    }
-
-    private var filteredEntries: [ToolCallEntry] {
-        entries.filter { entry in
+    private func recomputeFiltered() {
+        let result = entries.filter { entry in
             guard selectedCategories.contains(entry.category) else { return false }
             if errorsOnly && !entry.isError { return false }
             if !searchText.isEmpty {
@@ -185,46 +227,58 @@ struct ToolsMainPanelView: View {
             }
             return true
         }
+        filteredEntries = result
+
+        // Memoize the grouped representations from the same result.
+        let byTurn = Dictionary(grouping: result, by: \.turnIndex)
+        groupedByTurn = byTurn.keys.sorted().map { (turn: $0, entries: byTurn[$0] ?? []) }
+        groupedByCategory = Dictionary(grouping: result, by: \.category)
     }
 
     var body: some View {
-        if entries.isEmpty {
-            EmptyStateView(
-                icon: "wrench.and.screwdriver",
-                title: "No tool calls",
-                message: "This session has no tool usage to display."
-            )
-        } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
-                    // Header
-                    Text("Tools \u{2014} Session \"\(session.slug ?? session.id)\"")
-                        .font(Typography.panelTitle)
-                        .padding(.horizontal, Spacing.xl)
-                        .padding(.top, Spacing.lg)
+        Group {
+            if entries.isEmpty {
+                EmptyStateView(
+                    icon: "wrench.and.screwdriver",
+                    title: "No tool calls",
+                    message: "This session has no tool usage to display."
+                )
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Spacing.lg) {
+                        // Header
+                        Text("Tools \u{2014} Session \"\(session.slug ?? session.id)\"")
+                            .font(Typography.panelTitle)
+                            .padding(.horizontal, Spacing.xl)
+                            .padding(.top, Spacing.lg)
 
-                    // Stat cards
-                    statsRow
-                        .padding(.horizontal, Spacing.xl)
+                        // Stat cards
+                        statsRow
+                            .padding(.horizontal, Spacing.xl)
 
-                    // Filters
-                    filtersRow
-                        .padding(.horizontal, Spacing.xl)
+                        // Filters
+                        filtersRow
+                            .padding(.horizontal, Spacing.xl)
 
-                    // Grouping
-                    groupingPicker
-                        .padding(.horizontal, Spacing.xl)
+                        // Grouping
+                        groupingPicker
+                            .padding(.horizontal, Spacing.xl)
 
-                    Divider()
-                        .padding(.horizontal, Spacing.xl)
+                        Divider()
+                            .padding(.horizontal, Spacing.xl)
 
-                    // Tool call list
-                    toolCallList
-                        .padding(.horizontal, Spacing.xl)
-                        .padding(.bottom, Spacing.xl)
+                        // Tool call list
+                        toolCallList
+                            .padding(.horizontal, Spacing.xl)
+                            .padding(.bottom, Spacing.xl)
+                    }
                 }
             }
         }
+        .task(id: session.id) { computeEntries() }
+        .onChange(of: searchText) { _, _ in recomputeFiltered() }
+        .onChange(of: selectedCategories) { _, _ in recomputeFiltered() }
+        .onChange(of: errorsOnly) { _, _ in recomputeFiltered() }
     }
 
     // MARK: - Stat Cards Row
@@ -363,11 +417,8 @@ struct ToolsMainPanelView: View {
                 }
 
             case .byTurn:
-                let grouped = Dictionary(grouping: filteredEntries, by: \.turnIndex)
-                let sortedTurns = grouped.keys.sorted()
                 LazyVStack(spacing: Spacing.sm) {
-                    ForEach(sortedTurns, id: \.self) { turn in
-                        let turnEntries = grouped[turn] ?? []
+                    ForEach(groupedByTurn, id: \.turn) { turn, turnEntries in
                         DisclosureGroup {
                             VStack(spacing: Spacing.xs) {
                                 ForEach(turnEntries) { entry in
@@ -391,11 +442,10 @@ struct ToolsMainPanelView: View {
                 }
 
             case .byCategory:
-                let grouped = Dictionary(grouping: filteredEntries, by: \.category)
                 let orderedCategories: [ToolCategory] = [.read, .write, .exec, .other]
                 LazyVStack(spacing: Spacing.lg) {
                     ForEach(orderedCategories, id: \.rawValue) { category in
-                        if let catEntries = grouped[category], !catEntries.isEmpty {
+                        if let catEntries = groupedByCategory[category], !catEntries.isEmpty {
                             VStack(alignment: .leading, spacing: Spacing.sm) {
                                 HStack(spacing: Spacing.sm) {
                                     Circle()

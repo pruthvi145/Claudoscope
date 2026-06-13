@@ -17,6 +17,26 @@ struct ChatView: View {
     @State private var turnDurations: [Int: TurnDuration] = [:]
     @State private var parallelToolCounts: [Int: Int] = [:]
 
+    // Search matches, memoized once per searchText change (in `.onChange` below)
+    // instead of re-scanning all records on every body re-eval.
+    //   - matchingIndices: ordered list, preserves match order for next/previous
+    //     navigation, `matchCount`, and indexing by currentMatchIndex.
+    //   - matchingIndexSet: O(1) membership for the per-row highlight test in
+    //     searchHighlightedRecord — was an O(n) `.contains` on the array per
+    //     visible row, i.e. O(n²) per keystroke/scroll. Now O(1) per row.
+    @State private var matchingIndices: [Int] = []
+    @State private var matchingIndexSet: Set<Int> = []
+
+    private func computeMatchingIndices() -> [Int] {
+        guard !searchText.isEmpty else { return [] }
+        let query = searchText.lowercased()
+        return session.records.enumerated().compactMap { index, record in
+            guard record.type == .user || record.type == .assistant else { return nil }
+            if recordContainsQuery(record, query: query) { return index }
+            return nil
+        }
+    }
+
     private static func makeTurnDurations(_ session: ParsedSession) -> [Int: TurnDuration] {
         let durations = ObservabilityAnalyzer.computeTurnDurations(records: session.records)
         // turnIndex -> record index in a single pass (was an O(turns × records)
@@ -49,16 +69,6 @@ struct ChatView: View {
             }
         }
         return dict
-    }
-
-    private var matchingIndices: [Int] {
-        guard !searchText.isEmpty else { return [] }
-        let query = searchText.lowercased()
-        return session.records.enumerated().compactMap { index, record in
-            guard record.type == .user || record.type == .assistant else { return nil }
-            if recordContainsQuery(record, query: query) { return index }
-            return nil
-        }
     }
 
     private func recordContainsQuery(_ record: ParsedRecordRaw, query: String) -> Bool {
@@ -114,8 +124,13 @@ struct ChatView: View {
                 scrollButtons(proxy: proxy)
             }
             .onChange(of: searchText) { _, _ in
+                // Recompute matches once per query change (O(n)), then build the
+                // membership set once. Per-row highlight tests read the set in O(1).
+                let matches = computeMatchingIndices()
+                matchingIndices = matches
+                matchingIndexSet = Set(matches)
                 currentMatchIndex = 0
-                if let first = matchingIndices.first {
+                if let first = matches.first {
                     withAnimation {
                         proxy.scrollTo("record-\(first)", anchor: .center)
                     }

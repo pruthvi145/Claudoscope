@@ -7,7 +7,18 @@ struct SkillsSidebarContent: View {
     let skills: [SkillEntry]
     @Binding var selectedSkillName: String?
 
-    private var filtered: [SkillEntry] {
+    // Memoized filter result. Recomputed only when the query or the source
+    // skills array changes — not on every body evaluation. Behavior is
+    // identical to the prior `filtered` computed property.
+    @State private var filteredSkills: [SkillEntry] = []
+
+    // Stable scalar identity for the skills array (SkillEntry is not Equatable,
+    // so we derive a key from element ids to drive onChange/task refreshes).
+    private var skillsKey: String {
+        "\(skills.count)|" + skills.map(\.id).joined(separator: "\u{1F}")
+    }
+
+    private static func computeFiltered(_ skills: [SkillEntry], _ filterText: String) -> [SkillEntry] {
         if filterText.isEmpty { return skills }
         return skills.filter { skill in
             skill.name.localizedCaseInsensitiveContains(filterText) ||
@@ -17,20 +28,31 @@ struct SkillsSidebarContent: View {
     }
 
     var body: some View {
-        if filtered.isEmpty {
-            SidebarEmptyStateView(icon: "star", text: "No skills found")
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filtered) { skill in
-                    SkillRow(
-                        skill: skill,
-                        isSelected: selectedSkillName == skill.displayName
-                    ) {
-                        selectedSkillName = skill.displayName
+        Group {
+            if filteredSkills.isEmpty {
+                SidebarEmptyStateView(icon: "star", text: "No skills found")
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filteredSkills) { skill in
+                        SkillRow(
+                            skill: skill,
+                            isSelected: selectedSkillName == skill.displayName
+                        ) {
+                            selectedSkillName = skill.displayName
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+        }
+        .onAppear {
+            filteredSkills = Self.computeFiltered(skills, filterText)
+        }
+        .onChange(of: filterText) { _, newText in
+            filteredSkills = Self.computeFiltered(skills, newText)
+        }
+        .onChange(of: skillsKey) { _, _ in
+            filteredSkills = Self.computeFiltered(skills, filterText)
         }
     }
 }

@@ -7,30 +7,40 @@ struct HooksSidebarContent: View {
     let hookGroups: [HookEventGroup]
     @Binding var selectedEventId: String?
 
-    private var filtered: [HookEventGroup] {
-        if filterText.isEmpty { return hookGroups }
-        return hookGroups.filter { group in
-            group.event.localizedCaseInsensitiveContains(filterText) ||
-            group.rules.contains { $0.matcher.localizedCaseInsensitiveContains(filterText) }
+    @State private var filtered: [HookEventGroup] = []
+
+    private func recomputeFiltered() {
+        if filterText.isEmpty {
+            filtered = hookGroups
+        } else {
+            filtered = hookGroups.filter { group in
+                group.event.localizedCaseInsensitiveContains(filterText) ||
+                group.rules.contains { $0.matcher.localizedCaseInsensitiveContains(filterText) }
+            }
         }
     }
 
     var body: some View {
-        if filtered.isEmpty {
-            SidebarEmptyStateView(icon: "arrow.triangle.turn.up.right.diamond", text: "No hooks configured")
-        } else {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(filtered) { group in
-                    HookEventRow(
-                        group: group,
-                        isSelected: selectedEventId == group.id
-                    ) {
-                        selectedEventId = group.id
+        Group {
+            if filtered.isEmpty {
+                SidebarEmptyStateView(icon: "arrow.triangle.turn.up.right.diamond", text: "No hooks configured")
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filtered) { group in
+                        HookEventRow(
+                            group: group,
+                            isSelected: selectedEventId == group.id
+                        ) {
+                            selectedEventId = group.id
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
+        .onAppear { recomputeFiltered() }
+        .onChange(of: filterText) { recomputeFiltered() }
+        .onChange(of: hookGroups) { recomputeFiltered() }
     }
 }
 
@@ -104,9 +114,13 @@ struct HooksMainPanelView: View {
     let hookGroups: [HookEventGroup]
     let selectedEventId: String?
 
+    private var selectedGroup: HookEventGroup? {
+        guard let eventId = selectedEventId else { return nil }
+        return hookGroups.first(where: { $0.id == eventId })
+    }
+
     var body: some View {
-        if let eventId = selectedEventId,
-           let group = hookGroups.first(where: { $0.id == eventId }) {
+        if let group = selectedGroup {
             hookDetailContent(group)
         } else if hookGroups.isEmpty {
             EmptyStateView(
@@ -169,7 +183,7 @@ struct HooksMainPanelView: View {
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(group.rules) { rule in
                         CardView {
                             VStack(alignment: .leading, spacing: 10) {

@@ -14,8 +14,9 @@ struct HardeningSidebarContent: View {
     @Binding var selectedLintResultId: String?
 
     @State private var lintIssuesExpanded: Bool = true
+    @State private var hrdResults: [LintResult] = []
 
-    private var hrdResults: [LintResult] {
+    private func computeHrdResults() -> [LintResult] {
         let scoped = lintResults.filter { $0.checkId.rawValue.hasPrefix("HRD") }
         if filterText.isEmpty { return scoped }
         return scoped.filter { result in
@@ -57,6 +58,15 @@ struct HardeningSidebarContent: View {
                 lintIssuesGroup
             }
             .padding(.vertical, 4)
+            .onAppear {
+                hrdResults = computeHrdResults()
+            }
+            .onChange(of: filterText) { _ in
+                hrdResults = computeHrdResults()
+            }
+            .onChange(of: lintResults) { _ in
+                hrdResults = computeHrdResults()
+            }
         }
     }
 
