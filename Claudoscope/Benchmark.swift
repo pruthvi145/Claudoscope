@@ -108,6 +108,42 @@ enum PerfBenchmark {
             }
             line("4. Regex tag-strip (1 render pass)", stripMs,
                  String(format: "%.3f ms/msg", texts.isEmpty ? 0 : stripMs / Double(texts.count)))
+
+            // 4b) ChatView derived maps. OLD: computed-property recomputed per visible
+            // row with an O(turns × records) nested loop → simulate ~25 visible rows on
+            // first render. NEW: computed once, O(records). This is the real "opening a
+            // session takes seconds" cost the per-feature timings above couldn't see.
+            let recs = parsed.records
+            func oldTurnDurations() -> [Int: TurnDuration] {
+                let durations = ObservabilityAnalyzer.computeTurnDurations(records: recs)
+                var dict: [Int: TurnDuration] = [:]
+                var turnIndex = 0
+                var recordToTurn: [Int: Int] = [:]
+                for (i, record) in recs.enumerated() where record.type == .assistant && record.message?.stopReason != nil {
+                    recordToTurn[i] = turnIndex; turnIndex += 1
+                }
+                for duration in durations {
+                    for (recordIdx, turn) in recordToTurn where turn == duration.turnIndex { dict[recordIdx] = duration }
+                }
+                return dict
+            }
+            func newTurnDurations() -> [Int: TurnDuration] {
+                let durations = ObservabilityAnalyzer.computeTurnDurations(records: recs)
+                var turnToRecord: [Int: Int] = [:]
+                var turnIndex = 0
+                for (i, record) in recs.enumerated() where record.type == .assistant && record.message?.stopReason != nil {
+                    turnToRecord[turnIndex] = i; turnIndex += 1
+                }
+                var dict: [Int: TurnDuration] = [:]
+                for duration in durations { if let r = turnToRecord[duration.turnIndex] { dict[r] = duration } }
+                return dict
+            }
+            let visibleRows = 25
+            let oldMs = await ms { for _ in 0..<visibleRows { _ = oldTurnDurations() } }
+            let newMs = await ms { _ = newTurnDurations() }
+            line("4b. ChatView open (OLD per-row)", oldMs,
+                 String(format: "%d visible rows × recompute | NEW once=%.1fms (%.0f× faster)",
+                        visibleRows, newMs, newMs > 0 ? oldMs / newMs : 0))
         }
 
         // 5) Analytics compute across time ranges (the Analytics tab cost)
