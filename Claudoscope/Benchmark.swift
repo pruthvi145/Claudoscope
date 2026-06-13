@@ -62,6 +62,16 @@ enum PerfBenchmark {
         var pairs: [(session: SessionSummary, project: Project)] = []
         for p in projects { for s in (sessionsByProject[p.id] ?? []) { pairs.append((s, p)) } }
 
+        // Correctness checksum: cached summaries MUST reproduce the same cost/token
+        // totals as a fresh parse. Compare this line cold vs warm — they must match
+        // (modulo any session that changed on disk between the two runs).
+        let sumCost = pairs.reduce(0.0) { $0 + $1.session.estimatedCost }
+        let sumIn = pairs.reduce(0) { $0 + $1.session.totalInputTokens }
+        let sumOut = pairs.reduce(0) { $0 + $1.session.totalOutputTokens }
+        let sumCache = pairs.reduce(0) { $0 + $1.session.totalCacheReadTokens }
+        print(String(format: "   checksum: sessions=%ld cost=%.4f in=%ld out=%ld cacheRead=%ld",
+                     pairs.count, sumCost, sumIn, sumOut, sumCache))
+
         // Locate the largest transcript = worst-case "click a session" target.
         let largest = locateLargestSession(under: claudeDir.appendingPathComponent("projects"))
 
