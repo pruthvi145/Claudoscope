@@ -7,6 +7,13 @@ struct ClaudoscopeApp: App {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     init() {
+        // Headless feature benchmark: `Claudoscope --benchmark`. Runs the timing
+        // suite against real ~/.claude data and exits before any window/scan,
+        // so the GUI never launches. No cost on a normal launch (one argv check).
+        if CommandLine.arguments.contains("--benchmark") {
+            PerfBenchmark.runAndExit()
+        }
+
         let store = SessionStore()
         let updateService = UpdateService()
         _store = State(initialValue: store)
