@@ -40,6 +40,15 @@ struct ClaudoscopeApp: App {
                 OnboardingWindowController.shared.show()
             }
         }
+
+        // Dev/automation convenience: `--open-dashboard` opens the full dashboard
+        // window on launch (the app is otherwise menu-bar-only, opened from the
+        // popover). Lets the dashboard be opened headlessly.
+        if CommandLine.arguments.contains("--open-dashboard") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                MainWindowController.shared.open(store: store)
+            }
+        }
     }
 
     var body: some Scene {
