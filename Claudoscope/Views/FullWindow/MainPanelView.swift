@@ -38,9 +38,11 @@ struct MainPanelView: View {
             switch rail {
             case .analytics:
                 AnalyticsDetailView()
+                    .perfRender("analytics")
             case .sessions:
                 if let session = store.selectedSession {
                     SessionDetailTabView(session: session)
+                        .perfRender("sessions(\(session.records.count) records)")
                 } else {
                     EmptyStateView(
                         icon: "text.line.first.and.arrowtriangle.forward",

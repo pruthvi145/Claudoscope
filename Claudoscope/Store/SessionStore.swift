@@ -596,6 +596,7 @@ final class SessionStore {
     var sidebarAnalyticsData: AnalyticsData = .empty
 
     func loadSession(id: String, projectId: String, subagentFileName: String? = nil) async {
+        let t0 = CFAbsoluteTimeGetCurrent()
         let cacheKey = if let subagentFileName {
             "\(id)/subagents/\(subagentFileName)"
         } else {
@@ -605,6 +606,8 @@ final class SessionStore {
         // Check cache first
         if let cached = await cache.get(cacheKey) {
             self.selectedSession = cached
+            PerfLog.event(String(format: "loadSession cacheHit %.1fms records=%d id=%@",
+                                 (CFAbsoluteTimeGetCurrent() - t0) * 1000, cached.records.count, id))
             return
         }
 
@@ -630,7 +633,9 @@ final class SessionStore {
         }
 
         do {
+            let tParse = CFAbsoluteTimeGetCurrent()
             let parsed = try await parser.parse(url: fileURL, sessionId: parseSessionId)
+            let parseMs = (CFAbsoluteTimeGetCurrent() - tParse) * 1000
             let session = if subagentFileName != nil {
                 ParsedSession(
                     id: parsed.id,
@@ -647,6 +652,8 @@ final class SessionStore {
             }
             await cache.set(cacheKey, value: session)
             self.selectedSession = session
+            PerfLog.event(String(format: "loadSession parse %.1fms records=%d total=%.1fms id=%@",
+                                 parseMs, session.records.count, (CFAbsoluteTimeGetCurrent() - t0) * 1000, id))
         } catch {
             // Handle error
         }
