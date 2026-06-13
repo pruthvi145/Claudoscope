@@ -24,10 +24,13 @@ struct CachedSessionSummary: Codable {
 /// the plist + parse only what changed", cutting a multi-thousand-session scan
 /// from tens of seconds to ~1-2s.
 struct ScanSummaryCache: Codable {
-    static let schemaVersion = 1
+    // Bump ONLY when the parser logic or SessionSummary shape changes, so a build
+    // that parses differently won't trust stale summaries. Deliberately NOT tied
+    // to the bundle/marketing version — keying on that re-scanned on every
+    // cosmetic version bump (which made reopening the app rescan during dev).
+    static let schemaVersion = 2
 
     var version: Int
-    var appVersion: String        // invalidate when the parser logic ships changes
     var pricingSignature: String  // invalidate when costs would differ
     var entries: [String: CachedSessionSummary]
 
@@ -50,22 +53,14 @@ struct ScanSummaryCache: Codable {
         }.joined(separator: ";")
     }
 
-    /// Identity of the running build, so a parser-logic change (new app version)
-    /// forces a full reparse rather than trusting stale summaries.
-    static func appVersion() -> String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "dev"
-        let build = info?["CFBundleVersion"] as? String ?? "0"
-        return "\(short)-\(build)"
-    }
-
-    /// Load cached entries, or nil if absent / unreadable / wrong schema / stale
-    /// app version / mismatched pricing — any of which forces a full reparse.
+    /// Load cached entries, or nil if absent / unreadable / wrong schema /
+    /// mismatched pricing — any of which forces a full reparse. NOT keyed on the
+    /// bundle version, so reopening the app (or running a SHA-stamped rebuild)
+    /// reuses the cache as long as parser schema and pricing are unchanged.
     static func load(pricingSignature: String) -> [String: CachedSessionSummary]? {
         guard let url = cacheURL(), let data = try? Data(contentsOf: url),
               let cache = try? PropertyListDecoder().decode(ScanSummaryCache.self, from: data),
               cache.version == schemaVersion,
-              cache.appVersion == appVersion(),
               cache.pricingSignature == pricingSignature
         else { return nil }
         return cache.entries
@@ -77,7 +72,6 @@ struct ScanSummaryCache: Codable {
         guard let url = cacheURL() else { return }
         let cache = ScanSummaryCache(
             version: schemaVersion,
-            appVersion: appVersion(),
             pricingSignature: pricingSignature,
             entries: entries
         )
