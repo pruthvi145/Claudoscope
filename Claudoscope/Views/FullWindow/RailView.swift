@@ -67,5 +67,7 @@ private struct RailButton: View {
         }
         .buttonStyle(.plain)
         .help(item.label == "MCPs" ? "MCP Servers (Model Context Protocol)" : item.label)
+        // Stable identifier for VoiceOver + UI automation (e.g. "rail-sessions").
+        .accessibilityIdentifier("rail-\(item)")
     }
 }

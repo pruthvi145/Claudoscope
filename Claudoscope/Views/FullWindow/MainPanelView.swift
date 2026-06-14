@@ -54,6 +54,7 @@ struct MainPanelView: View {
                 if let session = store.selectedSession {
                     ToolsMainPanelView(session: session)
                         .id(session.id)
+                        .perfRender("tools")
                 } else {
                     EmptyStateView(
                         icon: "wrench.and.screwdriver",

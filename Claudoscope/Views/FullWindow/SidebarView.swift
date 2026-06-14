@@ -32,6 +32,7 @@ struct SidebarView: View {
                 TextField("Filter \(rail.label.lowercased())...", text: $filterText)
                     .textFieldStyle(.plain)
                     .font(Typography.body)
+                    .accessibilityIdentifier("sidebar-filter")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -354,6 +355,7 @@ private struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .accessibilityIdentifier("session-row")
     }
 }
 
